@@ -3,14 +3,14 @@
 stt — Local speech-to-text CLI for macOS using whisper.cpp
 
 Subcommands:
-    stt record [--duration SEC] [--output FILE]
+    stt record [-d SEC] [-D DEVICE] [--json] [--output FILE]
         Record from mic and transcribe. Ctrl+C to stop if no --duration.
 
-    stt file <audio_file>
+    stt file <audio_file> [--json]
         Transcribe an existing audio file (wav, mp3, flac, ogg).
 
-    stt stream
-        Real-time streaming transcription with rolling windows.
+    stt stream [-i INTERVAL] [-D DEVICE] [--json] [-v]
+        Real-time streaming transcription via whisper-server.
 
     stt list-devices
         List available audio input devices.
@@ -20,7 +20,7 @@ Requirements:
     - ffmpeg for audio capture
     - Model downloaded to ~/projects/stt/whisper.cpp/models/
 
-For agent use: pipe-friendly JSON output with --json flag.
+For agent use: pipe-friendly JSON output with --json flag (stream uses JSON lines).
 """
 
 import argparse
@@ -37,6 +37,7 @@ import textwrap
 import time
 import urllib.request
 from pathlib import Path
+from typing import Union
 
 # ── Paths ───────────────────────────────────────────────────────────
 PROJ = Path(__file__).resolve().parent
@@ -104,11 +105,13 @@ def whisper_transcribe(
             die(f"whisper-cli failed:\n{result.stderr}")
 
         if json_out:
-            # whisper-cli writes JSON to file, read it back
+            # whisper-cli writes JSON to file, read it back then clean up
             json_path = str(audio) + ".whisper.json"
             if os.path.exists(json_path):
                 with open(json_path) as f:
-                    return f.read()
+                    data = f.read()
+                os.unlink(json_path)
+                return data
             return result.stdout
         else:
             text = result.stdout.strip()
@@ -147,14 +150,13 @@ def _start_whisper_server(model_path: Path, language: str, port: int) -> subproc
         stderr=subprocess.DEVNULL,
     )
 
-    # Wait for server to be ready (poll /inference with OPTIONS)
+    # Wait for server to be ready (poll GET /)
     deadline = time.time() + 15
     while time.time() < deadline:
         try:
-            req = urllib.request.Request(
-                f"http://127.0.0.1:{port}/inference", method="OPTIONS"
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/", timeout=1
             )
-            urllib.request.urlopen(req, timeout=1)
             return proc
         except Exception:
             time.sleep(0.3)
@@ -163,19 +165,16 @@ def _start_whisper_server(model_path: Path, language: str, port: int) -> subproc
     die("whisper-server failed to start within 15s")
 
 
-def _transcribe_via_server(audio_path: Path, port: int, language: str) -> str:
-    """POST an audio file to whisper-server, return transcription text."""
+def _transcribe_via_server(wav_data: bytes, filename: str, port: int, language: str) -> str:
+    """POST WAV bytes to whisper-server, return transcription text."""
     import io
 
     boundary = "----WhisperBoundary"
-    with open(audio_path, "rb") as f:
-        data = f.read()
-
     body = (
         f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="{audio_path.name}"\r\n'
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
         f"Content-Type: audio/wav\r\n\r\n"
-    ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+    ).encode() + wav_data + f"\r\n--{boundary}--\r\n".encode()
 
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/inference",
@@ -189,7 +188,6 @@ def _transcribe_via_server(audio_path: Path, port: int, language: str) -> str:
         with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read())
             text = result.get("text", "").strip()
-            # Filter blank/silence markers
             if text in ("", "[BLANK_AUDIO]", "[ Silence ]"):
                 return ""
             return text
@@ -228,22 +226,15 @@ def cmd_record(args):
     tmp.close()
 
     duration = args.duration
-    ended_by_signal = False
-
-    def on_signal(sig, frame):
-        nonlocal ended_by_signal
-        ended_by_signal = True
-
-    signal.signal(signal.SIGINT, on_signal)
-    signal.signal(signal.SIGTERM, on_signal)
+    device = getattr(args, "device", ":0")
 
     # Build ffmpeg command
     ffmpeg_cmd = [
         "ffmpeg",
         "-f", "avfoundation",
-        "-i", ":0",           # default microphone
-        "-ar", "16000",       # whisper native sample rate
-        "-ac", "1",           # mono
+        "-i", device,          # user-selectable microphone
+        "-ar", "16000",        # whisper native sample rate
+        "-ac", "1",            # mono
         "-sample_fmt", "s16",
         "-y",
     ]
@@ -258,6 +249,7 @@ def cmd_record(args):
 
     print(status_line, file=sys.stderr, end="", flush=True)
 
+    proc = None
     try:
         proc = subprocess.Popen(
             ffmpeg_cmd,
@@ -266,8 +258,9 @@ def cmd_record(args):
         )
         proc.wait()
     except KeyboardInterrupt:
-        proc.terminate()
-        proc.wait()
+        if proc is not None:
+            proc.terminate()
+            proc.wait()
 
     print(" done.", file=sys.stderr)
     print(f"Transcribing...", file=sys.stderr, end="", flush=True)
@@ -324,17 +317,18 @@ def cmd_file(args):
             f.write(text)
 
 
-def _audio_rms(pcm_s16le: bytes) -> float:
+def _audio_rms(pcm_s16le: Union[bytes, bytearray]) -> float:
     """Root mean square energy of 16-bit PCM audio (0.0 = silence)."""
     if len(pcm_s16le) < 2:
         return 0.0
     import struct
-    count = len(pcm_s16le) // 2
-    samples = struct.unpack(f"<{count}h", pcm_s16le[: count * 2])
+    buf = memoryview(pcm_s16le)
+    count = len(buf) // 2
+    samples = struct.unpack(f"<{count}h", buf[: count * 2])
     return (sum(s * s for s in samples) / count) ** 0.5 / 32768.0
 
 
-def _has_speech(pcm_s16le: bytes, threshold: float = 0.01, min_frames: int = 5) -> bool:
+def _has_speech(pcm_s16le: Union[bytes, bytearray], threshold: float = 0.01, min_frames: int = 5) -> bool:
     """True if enough 0.1s frames exceed threshold (requires sustained speech)."""
     if len(pcm_s16le) < 3200:
         return _audio_rms(pcm_s16le) > threshold
@@ -401,7 +395,7 @@ def _is_hallucination(text: str) -> bool:
     return False
 
 
-def _build_wav(pcm_data: bytes, sample_rate: int = 16000) -> bytes:
+def _build_wav(pcm_data: Union[bytes, bytearray], sample_rate: int = 16000) -> bytes:
     """Wrap raw PCM s16le data in a WAV container (in memory)."""
     import struct
     data_len = len(pcm_data)
@@ -421,14 +415,14 @@ def _build_wav(pcm_data: bytes, sample_rate: int = 16000) -> bytes:
         b"data",
         data_len,
     )
-    return header + pcm_data
+    return header + bytes(pcm_data)
 
 
 def cmd_stream(args):
     """Real-time streaming via whisper-server with sliding window."""
-    WINDOW_SEC = args.chunk       # how much audio context to send each time
     INTERVAL = args.interval      # how often to send (seconds)
     model_path = resolve_model(args.model)
+    device = getattr(args, "device", ":0")
 
     # 1. Start whisper-server (model loaded once, stays resident)
     port = _find_free_port()
@@ -440,7 +434,7 @@ def cmd_stream(args):
     ffmpeg_proc = subprocess.Popen(
         [
             "ffmpeg", "-nostdin",
-            "-f", "avfoundation", "-i", ":0",
+            "-f", "avfoundation", "-i", device,
             "-ar", "16000", "-ac", "1", "-f", "s16le",
             "-",
         ],
@@ -450,14 +444,13 @@ def cmd_stream(args):
     )
 
     # Accumulating buffer: all audio since stream start.
-    # whisper transcribes the full session each time, so output
-    # naturally grows without fragmentation.
     bytes_per_sec = 16000 * 2  # 16kHz * 16-bit mono
     ring = bytearray()         # full accumulated audio
     last_text = ""
     silence_streak = 0
     ever_printed = False       # track first output for newline
     interrupted = False
+    chunk_num = 0              # for per-chunk filenames
 
     def on_interrupt(signum, frame):
         nonlocal interrupted
@@ -466,7 +459,7 @@ def cmd_stream(args):
     prev_sigint = signal.signal(signal.SIGINT, on_interrupt)
     prev_sigterm = signal.signal(signal.SIGTERM, on_interrupt)
 
-    print(f"Streaming (window={WINDOW_SEC}s, interval={INTERVAL}s, Ctrl+C to stop)...\n",
+    print(f"Streaming (window={args.chunk}s, interval={INTERVAL}s, Ctrl+C to stop)...\n",
           file=sys.stderr)
 
     last_send = 0.0
@@ -488,8 +481,9 @@ def cmd_stream(args):
                 last_send = now
 
                 # Energy gate: skip if no speech detected (prevents hallucination)
-                rms = _audio_rms(bytes(ring))
-                if not _has_speech(bytes(ring), threshold=args.silence):
+                # _audio_rms / _has_speech now accept bytearray directly (no copy)
+                rms = _audio_rms(ring)
+                if not _has_speech(ring, threshold=args.silence):
                     silence_streak += 1
                     if args.verbose:
                         print(f"  [{len(ring)//bytes_per_sec:.1f}s] rms={rms:.4f} (silent)",
@@ -497,24 +491,27 @@ def cmd_stream(args):
                     continue
                 silence_streak = 0
 
-                wav = _build_wav(bytes(ring))
-
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                    tmp.write(wav)
-                    tmp_path = tmp.name
-
-                text = _transcribe_via_server(Path(tmp_path), port, args.language)
-                os.unlink(tmp_path)
+                # Build WAV in memory and POST directly (no temp file)
+                wav = _build_wav(ring)
+                chunk_num += 1
+                text = _transcribe_via_server(wav, f"chunk_{chunk_num}.wav", port, args.language)
 
                 if args.verbose:
                     print(f"  [{len(ring)//bytes_per_sec:.1f}s, rms={rms:.4f}] → {text!r}",
                           file=sys.stderr, flush=True)
 
-                # Live caption: overwrite current line, newline only after 2s pause
+                # Filter hallucinations and duplicates
                 if text and not _is_hallucination(text) and text != last_text:
-                    was_silent = silence_streak > 4  # check before reset
-                    ending = "\n" if was_silent or not ever_printed else ""
-                    print(f"\r\033[K{text}", end=ending, flush=True)
+                    if args.json:
+                        print(json.dumps({
+                            "chunk": chunk_num,
+                            "time": round(len(ring) / bytes_per_sec, 1),
+                            "text": text,
+                        }), flush=True)
+                    else:
+                        was_silent = silence_streak > 4
+                        ending = "\n" if was_silent or not ever_printed else ""
+                        print(f"\r\033[K{text}", end=ending, flush=True)
                     last_text = text
                     silence_streak = 0
                     ever_printed = True
@@ -529,7 +526,8 @@ def cmd_stream(args):
         server_proc.terminate()
         server_proc.wait()
         if ever_printed:
-            print()  # final newline so shell prompt doesn't overwrite
+            if not args.json:
+                print()  # final newline so shell prompt doesn't overwrite
         print("Stopped.", file=sys.stderr)
 
 
@@ -549,6 +547,8 @@ def main():
     p = sub.add_parser("record", help="Record from mic and transcribe")
     p.add_argument("-d", "--duration", type=int, default=None,
                    help="Recording duration in seconds (unlimited if omitted)")
+    p.add_argument("-D", "--device", default=":0",
+                   help="Audio input device (default: :0, use list-devices to find)")
     p.add_argument("-o", "--output", default=None,
                    help="Save transcription to file")
     p.add_argument("-m", "--model", default=DEFAULT_MODEL,
@@ -582,6 +582,8 @@ def main():
                    help="Model filename or path")
     p.add_argument("-l", "--language", default="auto",
                    help="Language code (auto/zh/en/ja/...)")
+    p.add_argument("-D", "--device", default=":0",
+                   help="Audio input device (default: :0, use list-devices to find)")
     p.add_argument("-c", "--chunk", type=float, default=3.0,
                    help="Sliding window size in seconds (default: 3.0, more = better accuracy)")
     p.add_argument("-i", "--interval", type=float, default=0.5,
@@ -589,7 +591,7 @@ def main():
     p.add_argument("-s", "--silence", type=float, default=0.01,
                    help="RMS energy threshold per 0.1s frame (default: 0.01, lower = more sensitive)")
     p.add_argument("--json", action="store_true",
-                   help="Output JSON lines")
+                   help="Output JSON lines (chunk number, time, text per line)")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="Show RMS energy and server responses for debugging")
     p.set_defaults(func=cmd_stream)

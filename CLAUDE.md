@@ -6,7 +6,7 @@
 
 ```
 stt/
-├── stt                    # 唯一入口：Python CLI（644 行）
+├── stt                    # 唯一入口：Python CLI（612 行）
 ├── whisper.cpp/           # 上游引擎（git-ignored 的 build/ 和 models/*.bin 除外）
 │   ├── build/bin/
 │   │   ├── whisper-cli    # 核心转写二进制
@@ -55,4 +55,6 @@ stt/
 - CLI 逻辑全在 `stt` 一个文件里，直接改
 - whisper.cpp 本身不动，除非需要新功能/性能优化
 - 添加新模型：`bash whisper.cpp/models/download-ggml-model.sh <name>`
-- 不支持 stdin 流式转写 → 需要改上游 whisper.cpp 或改用 Python 封装
+- stream 模式通过 whisper-server + ffmpeg pipe 实现实时流式转写
+- 新增 `-D` / `--device` 参数支持选择音频输入设备
+- stream `--json` 输出 JSON lines（chunk / time / text）

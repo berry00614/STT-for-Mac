@@ -31,6 +31,7 @@ which stt  # /opt/homebrew/bin/stt
 stt record -d 30                # 录 30 秒 → 转写
 stt record                      # 无限录音，Ctrl+C 停
 stt record -d 30 -l zh          # 强制中文
+stt record -D ":1" -d 10       # 指定麦克风设备
 
 # ── 文件转写 ──
 stt file meeting.mp3            # 支持 wav/mp3/flac/ogg
@@ -39,8 +40,10 @@ stt file audio.wav --json       # JSON 输出（时间戳+置信度）
 # ── 实时流 ──
 stt stream                      # 默认：0.5s 推送，3s 上下文
 stt stream -i 0.3 -c 2.0       # 极速模式
+stt stream --json               # JSON lines 输出
 stt stream -s 0.005             # 安静环境（降低能量阈值）
 stt stream -v                   # 调试模式（显示 RMS 和原始响应）
+stt stream -D ":2"              # 指定麦克风设备
 
 # ── 设备 ──
 stt list-devices                # 列出可用麦克风
@@ -54,6 +57,8 @@ stt list-devices                # 列出可用麦克风
 | `-c`, `--chunk` | `3.0` | 会话上下文窗口（秒），越大精度越高 |
 | `-s`, `--silence` | `0.01` | 能量阈值，0.1s 帧 RMS 超过此值且持续 0.5s 才识别为语音 |
 | `-l`, `--language` | `auto` | 语言：`zh`/`en`/`ja`/`auto` |
+| `-D`, `--device` | `:0` | 音频输入设备，`stt list-devices` 查看可用设备 |
+| `--json` | `false` | stream 模式输出 JSON lines（chunk / time / text） |
 | `-v`, `--verbose` | `false` | 显示每帧 RMS 能量和 server 原始响应 |
 
 ## 模型
