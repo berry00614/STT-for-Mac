@@ -334,19 +334,19 @@ def _audio_rms(pcm_s16le: bytes) -> float:
     return (sum(s * s for s in samples) / count) ** 0.5 / 32768.0
 
 
-def _has_speech(pcm_s16le: bytes, threshold: float = 0.01) -> bool:
-    """True if any 0.1s frame exceeds the energy threshold.
-    Much more robust than whole-window RMS for sparse speech."""
-    if len(pcm_s16le) < 3200:  # need at least 0.2s
+def _has_speech(pcm_s16le: bytes, threshold: float = 0.01, min_frames: int = 5) -> bool:
+    """True if enough 0.1s frames exceed threshold (requires sustained speech)."""
+    if len(pcm_s16le) < 3200:
         return _audio_rms(pcm_s16le) > threshold
     frame_len = 1600  # 0.1s at 16kHz mono s16le
-    peak_rms = 0.0
-    for i in range(0, len(pcm_s16le) - frame_len, frame_len // 2):  # 50% overlap
-        frame_rms = _audio_rms(pcm_s16le[i:i + frame_len])
-        if frame_rms > peak_rms:
-            peak_rms = frame_rms
-        if frame_rms > threshold:
-            return True
+    above = 0
+    for i in range(0, len(pcm_s16le) - frame_len, frame_len // 2):
+        if _audio_rms(pcm_s16le[i:i + frame_len]) > threshold:
+            above += 1
+            if above >= min_frames:
+                return True
+        else:
+            above = 0  # reset on silent frame (requires consecutive)
     return False
 
 
@@ -375,13 +375,27 @@ def _is_hallucination(text: str) -> bool:
     # Garbage: contains replacement characters or unusual Unicode blocks
     if "�" in t:  # replacement character
         return True
-    # Count suspicious characters
+    # Count suspicious characters (non-Latin/CJK scripts that whisper
+    # hallucinates from noise)
     suspicious = 0
     for ch in t:
         cp = ord(ch)
-        # Georgian, Canadian Syllabics, Khmer, Devanagari, Hangul in mixed text
-        if cp > 0x0E00 and cp < 0x3000 and cp != 0x3000:
-            suspicious += 1
+        # Latin (0x0000-0x024F), CJK (0x4E00-0x9FFF, 0x3000-0x303F, 0xFF00-0xFFEF),
+        # common punctuation, spaces, digits, emoji are fine.
+        # Anything else in quantity → likely hallucination.
+        if cp < 0x0020:
+            continue  # control chars
+        if 0x0020 <= cp <= 0x024F:  # Latin + IPA
+            continue
+        if 0x3000 <= cp <= 0x9FFF:  # CJK
+            continue
+        if 0xFF00 <= cp <= 0xFFEF:  # Fullwidth forms
+            continue
+        if 0x2000 <= cp <= 0x206F:  # General punctuation
+            continue
+        if cp in (0x3000,):  # IDEOGRAPHIC SPACE is OK alone
+            continue
+        suspicious += 1
     if suspicious >= 3 and len(t) < 20:
         return True
     return False
@@ -435,12 +449,13 @@ def cmd_stream(args):
         stdin=subprocess.DEVNULL,
     )
 
-    # Sliding window buffer: keep WINDOW_SEC worth of audio
+    # Accumulating buffer: all audio since stream start.
+    # whisper transcribes the full session each time, so output
+    # naturally grows without fragmentation.
     bytes_per_sec = 16000 * 2  # 16kHz * 16-bit mono
-    window_bytes = int(WINDOW_SEC * bytes_per_sec)
-    ring = bytearray()
+    ring = bytearray()         # full accumulated audio
     last_text = ""
-    silence_streak = 0         # consecutive silent windows
+    silence_streak = 0
     interrupted = False
 
     def on_interrupt(signum, frame):
@@ -463,9 +478,9 @@ def cmd_stream(args):
                 chunk = ffmpeg_proc.stdout.read(bytes_per_sec // 4)
                 if chunk:
                     ring.extend(chunk)
-                    # Trim to sliding window
-                    if len(ring) > window_bytes:
-                        ring = ring[-window_bytes:]
+                    # Cap at 60s to bound memory (60 * 32000 = ~1.9MB)
+                    if len(ring) > 60 * bytes_per_sec:
+                        ring = ring[-(30 * bytes_per_sec):]
 
             now = time.time()
             if now - last_send >= INTERVAL and len(ring) >= bytes_per_sec // 2:
@@ -494,13 +509,9 @@ def cmd_stream(args):
                     print(f"  [{len(ring)//bytes_per_sec:.1f}s, rms={rms:.4f}] → {text!r}",
                           file=sys.stderr, flush=True)
 
-                # Filter hallucinations and diff output
+                # Filter hallucinations, print full text when it changes
                 if text and not _is_hallucination(text) and text != last_text:
-                    new_part = text
-                    if last_text and last_text in text:
-                        new_part = text[len(last_text):].lstrip()
-                    if new_part and not _is_hallucination(new_part):
-                        print(new_part, flush=True)
+                    print(text, flush=True)
                     last_text = text
 
     except KeyboardInterrupt:
@@ -568,8 +579,8 @@ def main():
                    help="Sliding window size in seconds (default: 3.0, more = better accuracy)")
     p.add_argument("-i", "--interval", type=float, default=0.5,
                    help="Send interval in seconds (default: 0.5, lower = faster)")
-    p.add_argument("-s", "--silence", type=float, default=0.005,
-                   help="RMS energy threshold for silence (default: 0.005, lower = more sensitive)")
+    p.add_argument("-s", "--silence", type=float, default=0.01,
+                   help="RMS energy threshold per 0.1s frame (default: 0.01, lower = more sensitive)")
     p.add_argument("--json", action="store_true",
                    help="Output JSON lines")
     p.add_argument("-v", "--verbose", action="store_true",
