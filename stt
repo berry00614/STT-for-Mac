@@ -479,6 +479,7 @@ def cmd_stream(args):
     # Track whether speech just resumed after a pause, so we start a
     # new line instead of overwriting the previous utterance.
     need_newline = False
+    prev_text_lines = 0  # how many terminal lines the last printed text used
 
     def on_interrupt(signum, frame):
         nonlocal interrupted
@@ -554,12 +555,27 @@ def cmd_stream(args):
                             "text": text,
                         }), flush=True)
                     else:
-                        # Speech resumed after a pause → preserve previous line
+                        # Speech resumed after a pause → commit old line
                         if need_newline:
                             print()
                             need_newline = False
+                            prev_text_lines = 0
+
+                        # Clear previous output. For single-line text use
+                        # \r\033[K; for multi-line use \033[{N}A\033[J to
+                        # move cursor up and clear all wrapped lines.
+                        if prev_text_lines > 1:
+                            print(f"\033[{prev_text_lines - 1}A\033[J", end="")
+                        elif prev_text_lines == 1 and ever_printed:
+                            print("\r\033[K", end="")
+
                         ending = "\n" if not ever_printed else ""
-                        print(f"\r\033[K{text}", end=ending, flush=True)
+                        print(text, end=ending, flush=True)
+
+                        # Track how many terminal lines this text occupies
+                        # so we can clear them on the next update.
+                        term_w = shutil.get_terminal_size().columns
+                        prev_text_lines = max(1, -(-len(text) // term_w))
                     last_text = text
                     ever_printed = True
 
