@@ -26,6 +26,7 @@ For agent use: pipe-friendly JSON output with --json flag.
 import argparse
 import json
 import os
+import select
 import shutil
 import signal
 import socket
@@ -323,9 +324,33 @@ def cmd_file(args):
             f.write(text)
 
 
+def _build_wav(pcm_data: bytes, sample_rate: int = 16000) -> bytes:
+    """Wrap raw PCM s16le data in a WAV container (in memory)."""
+    import struct
+    data_len = len(pcm_data)
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + data_len,
+        b"WAVE",
+        b"fmt ",
+        16,          # chunk size
+        1,           # PCM
+        1,           # mono
+        sample_rate,
+        sample_rate * 2,  # byte rate
+        2,           # block align
+        16,          # bits per sample
+        b"data",
+        data_len,
+    )
+    return header + pcm_data
+
+
 def cmd_stream(args):
-    """Real-time streaming via whisper-server (model loaded once)."""
-    CHUNK_SEC = args.chunk
+    """Real-time streaming via whisper-server with sliding window."""
+    WINDOW_SEC = args.chunk       # how much audio context to send each time
+    INTERVAL = args.interval      # how often to send (seconds)
     model_path = resolve_model(args.model)
 
     # 1. Start whisper-server (model loaded once, stays resident)
@@ -334,29 +359,23 @@ def cmd_stream(args):
     server_proc = _start_whisper_server(model_path, args.language, port)
     print(" ready.", file=sys.stderr)
 
-    # 2. Start ffmpeg segment muxer — one process, continuous chunk output
-    seg_dir = tempfile.mkdtemp(prefix="stt_stream_")
+    # 2. Start ffmpeg outputting raw PCM to stdout
     ffmpeg_proc = subprocess.Popen(
         [
-            "ffmpeg",
-            "-nostdin",
+            "ffmpeg", "-nostdin",
             "-f", "avfoundation", "-i", ":0",
-            "-ar", "16000", "-ac", "1", "-sample_fmt", "s16",
-            "-f", "segment",
-            "-segment_time", str(CHUNK_SEC),
-            "-reset_timestamps", "1",
-            "-y",
-            os.path.join(seg_dir, "chunk_%04d.wav"),
+            "-ar", "16000", "-ac", "1", "-f", "s16le",
+            "-",
         ],
+        stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
     )
 
-    print(f"Streaming (chunk={CHUNK_SEC}s, Ctrl+C to stop)...\n",
-          file=sys.stderr)
-
-    processed: set = set()
+    # Sliding window buffer: keep WINDOW_SEC worth of audio
+    bytes_per_sec = 16000 * 2  # 16kHz * 16-bit mono
+    window_bytes = int(WINDOW_SEC * bytes_per_sec)
+    ring = bytearray()
     last_text = ""
     interrupted = False
 
@@ -367,43 +386,48 @@ def cmd_stream(args):
     prev_sigint = signal.signal(signal.SIGINT, on_interrupt)
     prev_sigterm = signal.signal(signal.SIGTERM, on_interrupt)
 
+    print(f"Streaming (window={WINDOW_SEC}s, interval={INTERVAL}s, Ctrl+C to stop)...\n",
+          file=sys.stderr)
+
+    last_send = 0.0
+
     try:
         while not interrupted and ffmpeg_proc.poll() is None:
-            chunks = sorted(Path(seg_dir).glob("chunk_*.wav"))
+            # Non-blocking read from ffmpeg stdout
+            ready, _, _ = select.select([ffmpeg_proc.stdout], [], [], 0.1)
+            if ready:
+                chunk = ffmpeg_proc.stdout.read(bytes_per_sec // 4)
+                if chunk:
+                    ring.extend(chunk)
+                    # Trim to sliding window
+                    if len(ring) > window_bytes:
+                        ring = ring[-window_bytes:]
 
-            # Process all chunks EXCEPT the last one (ffmpeg is still writing it).
-            # The last chunk is only safe to process once ffmpeg moves on to the
-            # next one or exits.
-            pending = chunks[:-1] if len(chunks) > 1 else []
+            now = time.time()
+            if now - last_send >= INTERVAL and len(ring) >= bytes_per_sec // 2:
+                last_send = now
+                wav = _build_wav(bytes(ring))
 
-            for chunk in pending:
-                if chunk.name in processed:
-                    continue
+                # Save to temp file (server needs Content-Length header)
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                    tmp.write(wav)
+                    tmp_path = tmp.name
 
-                text = _transcribe_via_server(chunk, port, args.language)
-                processed.add(chunk.name)
+                text = _transcribe_via_server(Path(tmp_path), port, args.language)
+                os.unlink(tmp_path)
 
                 if args.verbose:
-                    print(f"  [{chunk.name}] → {text!r}", file=sys.stderr, flush=True)
+                    print(f"  [{len(ring)//bytes_per_sec:.1f}s] → {text!r}",
+                          file=sys.stderr, flush=True)
 
+                # Diff: only print new text since last window
                 if text and text != last_text:
-                    print(text, flush=True)
+                    new_part = text
+                    if last_text and last_text in text:
+                        new_part = text[len(last_text):].lstrip()
+                    if new_part:
+                        print(new_part, flush=True)
                     last_text = text
-
-            time.sleep(0.3)
-
-        # ffmpeg exited or interrupted — process any remaining completed chunks
-        for chunk in sorted(Path(seg_dir).glob("chunk_*.wav")):
-            if chunk.name in processed:
-                continue
-            if chunk.stat().st_size < 1000:
-                continue
-            text = _transcribe_via_server(chunk, port, args.language)
-            if args.verbose:
-                print(f"  [final {chunk.name}] → {text!r}", file=sys.stderr, flush=True)
-            if text and text != last_text:
-                print(text, flush=True)
-                last_text = text
 
     except KeyboardInterrupt:
         pass
@@ -414,7 +438,6 @@ def cmd_stream(args):
         ffmpeg_proc.wait()
         server_proc.terminate()
         server_proc.wait()
-        shutil.rmtree(seg_dir, ignore_errors=True)
         print("\nStopped.", file=sys.stderr)
 
 
@@ -467,8 +490,10 @@ def main():
                    help="Model filename or path")
     p.add_argument("-l", "--language", default="auto",
                    help="Language code (auto/zh/en/ja/...)")
-    p.add_argument("-c", "--chunk", type=int, default=3,
-                   help="Chunk duration in seconds (default: 3, increase for better accuracy)")
+    p.add_argument("-c", "--chunk", type=float, default=3.0,
+                   help="Sliding window size in seconds (default: 3.0, more context = better accuracy)")
+    p.add_argument("-i", "--interval", type=float, default=0.5,
+                   help="Send interval in seconds (default: 0.5, lower = faster response)")
     p.add_argument("--json", action="store_true",
                    help="Output JSON lines")
     p.add_argument("-v", "--verbose", action="store_true",
