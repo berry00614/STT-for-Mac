@@ -6,18 +6,18 @@
 [![macOS](https://img.shields.io/badge/macOS-Sequoia%2B-black)](https://apple.com)
 [![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-M5_Max-orange)](https://apple.com)
 
-## 特性
+## 特性 Features
 
-- 🔒 **完全离线** — 零网络请求，隐私绝对安全
-- ⚡ **亚秒级延迟** — 滑动窗口 + whisper-server 长驻内存，<500ms 出字
-- 🧠 **智能抗幻觉** — 三层防护（能量门控 + 语音检测阈值 + 幻觉文本过滤），静音不抽风
-- 🖥️ **原生加速** — CoreML + Metal + Accelerate，M5 Max 上推理 <100ms
-- 🤖 **Agent 友好** — JSON 输出、CLI first、可作 Claude Code skill 调用
-- 🌐 **多语言** — 自动检测中/英/日等 99 种语言
+- **完全离线** — 零网络请求，隐私绝对安全
+- **低延迟** — 滑动窗口 + whisper-server 长驻内存，<500ms 出字
+- **智能抗幻觉** — 三层防护（能量门控 + 语音检测阈值 + 幻觉文本过滤），静音不抽风
+- **原生加速** — CoreML + Metal + Accelerate，M5 Max 上推理 <100ms
+- **Agent 友好** — JSON 输出、CLI first、可作 Claude Code skill 调用
+- **多语言** — 自动检测中/英/日等 99 种语言
 
 ## 安装
 
-### 新电脑一键安装
+### 一键安装脚本
 
 ```bash
 git clone https://github.com/berry00614/stt.git ~/projects/stt
