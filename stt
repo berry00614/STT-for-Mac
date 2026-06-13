@@ -26,6 +26,7 @@ For agent use: pipe-friendly JSON output with --json flag (stream uses JSON line
 import argparse
 import json
 import os
+import re
 import select
 import shutil
 import signal
@@ -191,8 +192,7 @@ def _transcribe_via_server(wav_data: bytes, filename: str, port: int, language: 
             if text in ("", "[BLANK_AUDIO]", "[ Silence ]"):
                 return ""
             return text
-    except Exception as e:
-        print(f"  [server error: {e}]", file=sys.stderr)
+    except Exception:
         return ""
 
 
@@ -344,13 +344,22 @@ def _has_speech(pcm_s16le: Union[bytes, bytearray], threshold: float = 0.01, min
     return False
 
 
+
 # Hallucination garbage patterns that whisper emits for silence/noise
 _HALLUCINATION_SUBSTRINGS = [
     "(crickets", "(scissors", "(keyboard", "(typing", "(phone",
     "(silence", "(wind", "(footsteps", "(music", "(breathing",
     "(applause", "(laughter", "(sigh", "(cough", "(sneeze",
     "[BLANK_AUDIO]", "[ Silence ]", "[Subscribe]",
+    # Chinese YouTube / subtitle artifacts
+    "字幕", "製作", "字幕製作", "熱點預測",
+    "订阅", "訂閱", "点赞", "点讚", "分享",
+    "关注", "關注", "一键三连", "弹幕",
+    "字幕由", "自动生成", "自动生成字幕",
 ]
+
+# Match any parenthetical segment: (...), [...], （...）, 【...】
+_PAREN_RE = re.compile(r'[\(\[（【][^\)\]）】]*[\)\]）】]')
 
 
 def _is_hallucination(text: str) -> bool:
@@ -358,27 +367,31 @@ def _is_hallucination(text: str) -> bool:
     t = text.strip().lower()
     if not t:
         return True
-    # Parenthetical sound-effect descriptions
+    # Entire text is a parenthetical sound-effect description
     if t.startswith("(") and t.endswith(")"):
         return True
     if t.startswith("[") and t.endswith("]"):
         return True
+    # Scan parenthetical segments anywhere in the text (handles
+    # "(字幕製作:貝爾)" embedded inside normal speech)
+    for match in _PAREN_RE.finditer(t):
+        seg = match.group()
+        for marker in _HALLUCINATION_SUBSTRINGS:
+            if marker.lower() in seg:
+                return True
     for marker in _HALLUCINATION_SUBSTRINGS:
         if marker.lower() in t:
             return True
     # Garbage: contains replacement characters or unusual Unicode blocks
-    if "�" in t:  # replacement character
+    if "�" in t:
         return True
     # Count suspicious characters (non-Latin/CJK scripts that whisper
     # hallucinates from noise)
     suspicious = 0
     for ch in t:
         cp = ord(ch)
-        # Latin (0x0000-0x024F), CJK (0x4E00-0x9FFF, 0x3000-0x303F, 0xFF00-0xFFEF),
-        # common punctuation, spaces, digits, emoji are fine.
-        # Anything else in quantity → likely hallucination.
         if cp < 0x0020:
-            continue  # control chars
+            continue
         if 0x0020 <= cp <= 0x024F:  # Latin + IPA
             continue
         if 0x3000 <= cp <= 0x9FFF:  # CJK
