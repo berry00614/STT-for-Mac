@@ -17,12 +17,40 @@
 
 ## 安装
 
-```bash
-# 已全局安装
-which stt  # /opt/homebrew/bin/stt
+### 新电脑一键安装
 
-# 依赖：ffmpeg + whisper.cpp (CoreML/Metal/Accelerate)
+```bash
+git clone https://github.com/berry00614/stt.git ~/projects/stt
+cd ~/projects/stt
+bash setup.sh
 ```
+
+脚本自动完成：Homebrew 依赖 → whisper.cpp 编译（CoreML/Metal/Accelerate）→ 模型下载 → PATH 安装。
+
+### 手动安装
+
+```bash
+# 1. 系统依赖
+brew install ffmpeg cmake
+
+# 2. 编译 whisper.cpp
+cd whisper.cpp
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DWHISPER_COREML=ON -DWHISPER_COREML_ALLOW_FALLBACK=ON
+cmake --build build -j $(sysctl -n hw.ncpu)
+
+# 3. 下载模型（466MB）
+bash models/download-ggml-model.sh small
+
+# 4. 安装到 PATH
+cd ..
+ln -s "$(pwd)/stt" /opt/homebrew/bin/stt
+```
+
+### 依赖
+
+- macOS (Apple Silicon)，Python 3.9+
+- ffmpeg（录音） + cmake（编译）
+- whisper.cpp（CoreML + Metal + Accelerate）
 
 ## 使用
 
