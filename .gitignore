@@ -5,5 +5,5 @@ __pycache__/
 .DS_Store
 
 # Xcode
-*/xcuserdata/
-*.xcuserstate
+**/xcuserdata/
+**/*.xcuserstate

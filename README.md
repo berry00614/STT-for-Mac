@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://python.org)
 [![macOS](https://img.shields.io/badge/macOS-Sequoia%2B-black)](https://apple.com)
-[![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-M5_Max-orange)](https://apple.com)
+![Apple Silicon](https://img.shields.io/badge/-Apple%20Silicon-333333?logo=apple&logoColor=white)
 
 ## 特性 Features
 
