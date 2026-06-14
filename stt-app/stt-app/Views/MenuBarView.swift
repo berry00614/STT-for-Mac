@@ -67,7 +67,9 @@ struct MenuBarView: View {
 
     private var actionsSection: some View {
         Group {
+            // --- Captions server control ---
             if transcriptionService.serverManager.isLoading {
+                // Starting: show cancel
                 HStack(spacing: 4) {
                     ProgressView()
                         .scaleEffect(0.6)
@@ -76,25 +78,30 @@ struct MenuBarView: View {
                         .foregroundColor(.secondary)
                 }
                 .padding(.horizontal, 12)
+                Button(action: stopCaptions) {
+                    Label("Cancel", systemImage: "xmark.circle")
+                }
             } else if transcriptionService.isRunning {
+                // Running: show stop
                 Button(action: stopCaptions) {
                     Label("Stop Captions", systemImage: "stop.circle")
                 }
+                // Window toggle
+                if captionWindowController.isOpen {
+                    Button(action: { captionWindowController.close() }) {
+                        Label("Hide Caption Window", systemImage: "eye.slash")
+                    }
+                } else {
+                    Button(action: {
+                        captionWindowController.open(transcriptionService: transcriptionService)
+                    }) {
+                        Label("Show Caption Window", systemImage: "eye")
+                    }
+                }
             } else {
+                // Stopped: show start
                 Button(action: startCaptions) {
                     Label("Start Captions", systemImage: "captions.bubble")
-                }
-            }
-
-            if captionWindowController.isOpen {
-                Button(action: { captionWindowController.close() }) {
-                    Label("Hide Caption Window", systemImage: "eye.slash")
-                }
-            } else if transcriptionService.isRunning {
-                Button(action: {
-                    captionWindowController.open(transcriptionService: transcriptionService)
-                }) {
-                    Label("Show Caption Window", systemImage: "eye")
                 }
             }
 
