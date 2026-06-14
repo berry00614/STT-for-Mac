@@ -119,9 +119,11 @@ enum TextNormalizer {
         }
 
         // Ensure space after English punctuation (word boundaries)
+        // Note: must escape regex metacharacters (especially ".")
         for mark in [".", ",", "!", "?", ";", ":"] {
+            let escaped = NSRegularExpression.escapedPattern(for: mark)
             result = result.replacingOccurrences(
-                of: "\(mark)",
+                of: escaped,
                 with: "\(mark) ",
                 options: .regularExpression
             )
