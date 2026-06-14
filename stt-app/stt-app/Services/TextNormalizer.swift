@@ -193,13 +193,12 @@ enum TextNormalizer {
     private static func chineseFixes(_ text: String) -> String {
         var result = text
 
-        // Fix: English punctuation used in Chinese text → Chinese marks
-        // Only in clearly Chinese contexts (has CJK characters)
-        let hasCJK = text.unicodeScalars.contains { 0x4E00...0x9FFF ~= $0.value }
-
-        if hasCJK {
-            // Don't aggressively swap — only fix obvious mixed cases
-            // e.g. "你好." within Chinese text → "你好。"
+        // 繁→简：macOS 内置 ICU 转换（Hant-Hans = Traditional → Simplified）
+        if let simplified = result.applyingTransform(
+            StringTransform(rawValue: "Hant-Hans"),
+            reverse: false
+        ) {
+            result = simplified
         }
 
         // Fix common Chinese-English mix: remove stray spaces between CJK chars
