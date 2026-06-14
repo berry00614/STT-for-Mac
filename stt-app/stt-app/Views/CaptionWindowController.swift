@@ -8,9 +8,11 @@ final class CaptionWindowController: NSObject, ObservableObject {
 
     private var panel: NSPanel?
 
+    @Published private(set) var isOpen = false
+
     /// Toggle the caption overlay visibility.
     func toggle(transcriptionService: TranscriptionService) {
-        if panel != nil {
+        if isOpen {
             close()
         } else {
             open(transcriptionService: transcriptionService)
@@ -19,7 +21,7 @@ final class CaptionWindowController: NSObject, ObservableObject {
 
     /// Open the caption overlay.
     func open(transcriptionService: TranscriptionService) {
-        guard panel == nil else { return }
+        guard !isOpen else { return }
 
         let panel = CaptionPanel(
             contentRect: NSRect(x: 0, y: 0, width: 600, height: 100),
@@ -57,15 +59,15 @@ final class CaptionWindowController: NSObject, ObservableObject {
 
         panel.orderFrontRegardless()
         self.panel = panel
+        isOpen = true
     }
 
     /// Close the caption overlay.
     func close() {
         panel?.close()
         panel = nil
+        isOpen = false
     }
-
-    var isOpen: Bool { panel != nil }
 }
 
 /// Custom NSPanel for caption overlay.
