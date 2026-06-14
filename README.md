@@ -3,8 +3,9 @@
 > 基于 whisper.cpp 的本地语音转写 CLI。**完全离线**，**亚秒级延迟**，M 系列芯片原生加速。
 
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://python.org)
-[![macOS](https://img.shields.io/badge/macOS-Sequoia%2B-black)](https://apple.com)
+[![macOS](https://img.shields.io/badge/macOS-14.6%2B-black)](https://apple.com)
 ![Apple Silicon](https://img.shields.io/badge/-Apple%20Silicon-333333?logo=apple&logoColor=white)
+[![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange)](https://swift.org)
 
 ## 特性 Features
 
@@ -14,6 +15,7 @@
 - **原生加速** — CoreML + Metal + Accelerate，M5 Max 上推理 <100ms
 - **Agent 友好** — JSON 输出、CLI first、可作 Claude Code skill 调用
 - **多语言** — 自动检测中/英/日等 99 种语言
+- **macOS 原生 App** — 菜单栏图标 + 全局快捷键听写 + 浮动字幕
 
 ## 安装
 
@@ -133,6 +135,69 @@ Apple Silicon (M1–M5) 自动启用全部加速后端：
 
 M5 Max + 128GB 实测：small 模型推理 ~80ms/次，large-v3-turbo ~200ms/次。
 
+## macOS App
+
+除了 CLI，项目还包含 `stt-app` — 原生 macOS 菜单栏应用，提供一键语音输入（全局热键 + 实时字幕 + 自动粘贴）。
+
+### 使用方式
+
+1. 用 Xcode 打开 `stt-app/stt-app.xcodeproj`，Build & Run（⌘R）
+2. 菜单栏出现 🎤 图标
+3. **按住右 Option 键** → 开始录音 → 松开 → 自动转写并粘贴到光标位置
+4. 点击菜单栏图标 → Start Captions → 打开浮动字幕窗口
+5. 点击菜单栏图标 → Preferences → 配置模型、语言等
+
+### 功能
+
+| 功能 | 描述 |
+|------|------|
+| **全局热键** | 按住右 Option 键录音，松开自动转写粘贴 |
+| **实时字幕** | 浮动 NSPanel 窗口，置顶显示流转写结果 |
+| **抗幻觉** | 三层防护：能量门控 + 语音概率阈值 + 模式匹配过滤 |
+| **文本规范化** | 繁体→简体中文转换，标点规范化 |
+| **Dock 自适应** | 有窗口时显示 Dock 图标，仅菜单栏时隐藏 |
+| **零依赖** | 纯 Swift stdlib + AppKit + AVFoundation，无第三方包 |
+
+### 权限
+
+| 权限 | 用途 |
+|------|------|
+| **Accessibility** | 检测右 Option 键 + 模拟 Cmd+V 粘贴 |
+| **Microphone** | 录音输入 |
+
+首次启动会自动引导授权。
+
+### 架构
+
+```
+右 Option 键 (Carbon Event)
+    │
+    ▼
+AVAudioEngine (麦克风捕获)
+    │  float32 PCM 流
+    ▼
+WhisperServerManager (whisper-server 子进程)
+    │  HTTP POST /inference
+    ▼
+TranscriptionService ──► CaptionOverlayView (实时字幕)
+    │
+    ▼
+AntiHallucination + TextNormalizer
+    │
+    ▼
+PasteController (CGEventPost → Cmd+V)
+```
+
+### 构建
+
+Xcode 项目使用自动签名（`CODE_SIGN_STYLE = Automatic`），无需额外配置即可在本地运行。部署目标为至少 macOS 14.6。
+
+```bash
+# 命令行构建（需要 Xcode 16+）
+cd stt-app
+xcodebuild -project stt-app.xcodeproj -scheme stt-app -configuration Release build
+```
+
 ## Claude Code Skill
 
 已注册为 `/stt` skill。在对话中说「帮我转写这段录音」即可触发。
@@ -147,14 +212,20 @@ stt file audio.mp3 -l zh   # 中文文件显式指定语言
 
 ```
 ~/projects/stt/
-├── stt                  # CLI 入口（Python stdlib only，零 pip 依赖）
-├── whisper.cpp/         # whisper.cpp 引擎
+├── stt                    # CLI 入口（Python stdlib only，零 pip 依赖）
+├── stt-app/               # macOS 菜单栏应用（SwiftUI + AppKit）
+│   ├── stt-app.xcodeproj/ # Xcode 项目
+│   └── stt-app/
+│       ├── Models/        # AppSettings, TranscriptionChunk
+│       ├── Services/      # 录音、转写、热键、粘贴、抗幻觉
+│       └── Views/         # 菜单栏、字幕、HUD、设置
+├── whisper.cpp/           # whisper.cpp 引擎
 │   ├── build/bin/
 │   │   ├── whisper-cli       # 批处理转写
 │   │   └── whisper-server   # HTTP 流式服务
 │   └── models/
 │       └── ggml-small.bin   # 默认模型
-├── CLAUDE.md            # 项目文档
+├── CLAUDE.md              # 项目文档
 └── README.md
 ```
 

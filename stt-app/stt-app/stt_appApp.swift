@@ -8,21 +8,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     let captionWindowController = CaptionWindowController()
     let hudController = HUDPanelController()
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        // Set app to accessory mode (no Dock icon, menu bar only)
-        NSApp.setActivationPolicy(.accessory)
+    /// Tracks whether the Settings window is currently open.
+    @Published var isSettingsOpen = false
 
+    private var cancellables = Set<AnyCancellable>()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
         // Start HUD observation
         hudController.observe(dictationService: dictationService)
 
         // Start hotkey monitoring
         startHotkeyMonitor()
+
+        // Observe window state to toggle Dock visibility
+        observeWindows()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         transcriptionService.stop()
         captionWindowController.close()
         hudController.hide()
+    }
+
+    // MARK: - Dock Visibility
+
+    /// Observe all window-open states and toggle the Dock icon accordingly:
+    ///   - `.accessory` when only the menu bar is visible (no Dock icon)
+    ///   - `.regular`   when any window is open (shows in Dock)
+    private func observeWindows() {
+        Publishers.CombineLatest3(
+            captionWindowController.$isOpen,
+            hudController.$isOpen,
+            $isSettingsOpen
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _, _, _ in
+            self?.updateActivationPolicy()
+        }
+        .store(in: &cancellables)
+
+        // Set initial state (no windows open → .accessory)
+        updateActivationPolicy()
+    }
+
+    private func updateActivationPolicy() {
+        let hadVisibleWindow = NSApp.activationPolicy() == .regular
+
+        let hasVisibleWindow = captionWindowController.isOpen
+                            || hudController.isOpen
+                            || isSettingsOpen
+
+        if hasVisibleWindow {
+            NSApp.setActivationPolicy(.regular)
+            // Bring the app forward so the user sees the window they just opened
+            if !hadVisibleWindow {
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        } else {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 
     // MARK: - Hotkey Setup
@@ -94,6 +138,8 @@ struct stt_appApp: App {
         // Settings window (opened from menu bar)
         Window("Preferences", id: "settings") {
             SettingsView()
+                .onAppear { appDelegate.isSettingsOpen = true }
+                .onDisappear { appDelegate.isSettingsOpen = false }
         }
         .windowResizability(.contentSize)
         .defaultSize(width: 420, height: 380)

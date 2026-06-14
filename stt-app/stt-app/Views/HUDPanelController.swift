@@ -5,6 +5,10 @@ import Combine
 /// Manages the dictation HUD panel — a small floating indicator shown during dictation.
 final class HUDPanelController: ObservableObject {
     private var panel: NSPanel?
+
+    /// Whether the HUD panel is currently visible.
+    @Published private(set) var isOpen = false
+
     private var cancellables = Set<AnyCancellable>()
 
     /// Start observing a dictation service to show/hide the HUD automatically.
@@ -78,10 +82,12 @@ final class HUDPanelController: ObservableObject {
 
         panel.orderFrontRegardless()
         self.panel = panel
+        isOpen = true
     }
 
     func hide() {
         panel?.close()
         panel = nil
+        isOpen = false
     }
 }
