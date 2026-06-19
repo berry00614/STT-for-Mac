@@ -22,6 +22,24 @@
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
+      <PostActions>
+         <ExecutionAction
+            ActionType = "Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction">
+            <ActionContent
+               title = "Apply stable local signature"
+               scriptText = "&quot;${SRCROOT}/scripts/sign-local-app.sh&quot;&#10;">
+               <EnvironmentBuildable>
+                  <BuildableReference
+                     BuildableIdentifier = "primary"
+                     BlueprintIdentifier = "3D9BBDB02FDD8D550001D38A"
+                     BuildableName = "STT for Mac.app"
+                     BlueprintName = "STT for Mac"
+                     ReferencedContainer = "container:stt-app.xcodeproj">
+                  </BuildableReference>
+               </EnvironmentBuildable>
+            </ActionContent>
+         </ExecutionAction>
+      </PostActions>
    </BuildAction>
    <TestAction
       buildConfiguration = "Debug"

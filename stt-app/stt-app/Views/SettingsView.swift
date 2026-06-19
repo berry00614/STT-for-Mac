@@ -103,7 +103,9 @@ struct SettingsView: View {
                 HStack {
                     Image(systemName: hasAccessibility ? "checkmark.circle.fill" : "xmark.circle.fill")
                         .foregroundColor(hasAccessibility ? .green : .red)
-                    Text(hasAccessibility ? "Accessibility permission granted" : "Accessibility permission required for paste")
+                    Text(hasAccessibility
+                         ? "Accessibility permission granted"
+                         : "Accessibility permission required for the hotkey and paste")
                         .font(.caption)
                     if !hasAccessibility {
                         Button("Grant") {

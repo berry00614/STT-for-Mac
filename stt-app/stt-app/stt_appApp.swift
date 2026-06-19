@@ -36,6 +36,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // Accessibility may be granted while System Settings is in front.
+        // Retry registration when the user returns so a relaunch is unnecessary.
+        if AXIsProcessTrusted() {
+            startHotkeyMonitor(promptIfNeeded: false)
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         liveCaptionService.stop()
         captionWindowController.close()
@@ -86,10 +94,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // MARK: - Hotkey Setup
 
-    private func startHotkeyMonitor() {
+    private func startHotkeyMonitor(promptIfNeeded: Bool = true) {
         let success = dictationService.startMonitoring()
 
         if !success {
+            guard promptIfNeeded else { return }
+
             // Carbon RegisterEventHotKey requires Accessibility permission.
             // The same permission is used for paste (CGEventPost).
             // On first failure, request Accessibility and retry.
@@ -105,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                         STT for Mac needs Accessibility access to detect the Right Option key and paste text.
 
                         Go to System Settings > Privacy & Security > Accessibility,
-                        then enable STT for Mac. You may need to relaunch the app.
+                        then enable STT for Mac and return to the app.
 
                         (No other permissions are needed — no Input Monitoring, no special entitlements.)
                         """
