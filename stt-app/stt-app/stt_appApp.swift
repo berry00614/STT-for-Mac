@@ -2,6 +2,7 @@ import SwiftUI
 import Combine
 
 /// NSApplicationDelegate for menu bar app lifecycle and permission setup.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     let dictationService = DictationService()
     let liveCaptionService = LiveCaptionService()
